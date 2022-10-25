@@ -235,10 +235,10 @@ def main():
             print(f'Folder = {folder}')
             cali, data, pressure = load(folder)
             # 3D arrays: angle x sensor x rpm
-            all_data, columns = prepare_all_data(folder, data, pressure)
+            all_data, columns = prepare_all_data(folder, data, pressure, test=i)
             save_csv(folder+'_data.csv', columns, all_data)
             print('saved data from csv')
-            cali_data, cali_columns = prepare_cali_data(folder, cali, CALI_WEIGHTS[i], CALI_STEPS[i])
+            cali_data, cali_columns = prepare_cali_data(folder, cali, CALI_WEIGHTS[i], CALI_STEPS[i], test=i)
             save_csv(folder+'_cali.csv', cali_columns, cali_data)
             print('saved calibration data from csv')
         else:
@@ -541,7 +541,7 @@ def main():
                 ax.set_xlabel('Wind speed (m/s)')
                 ax.set_ylabel('Wind angle (degrees)')
                 ax.set_zlabel('Wind coefficient')
-                plt.show()
+                #plt.show()
                 plt.close()
 
             if True:  # Max and mean loads against test runs
@@ -616,7 +616,7 @@ def zero(all_data):
         else:
             print(f'WARNING - Zero row not found')
 
-def prepare_cali_data(folder, all_cali, cali_weights, cali_steps = (9, 9), baselog=25):
+def prepare_cali_data(folder, all_cali, cali_weights, cali_steps = (9, 9), baselog=25, test=0):
     remove_list = [None, None]
     if os.path.exists(folder + '/cali_mask.pkl'):
         with open(folder + '/cali_mask.pkl', 'rb') as file:
@@ -627,7 +627,7 @@ def prepare_cali_data(folder, all_cali, cali_weights, cali_steps = (9, 9), basel
         cali2 = cali
         for index in EXCLUDE:
             cali2 = cali2.drop(f'Strain {index+1}', axis=1, inplace=False)
-        remove_list[i] = detect_steps(cali2, remove=remove_list[i], manual=args.manualcali, num=cali_steps[i], numcolumn=10-len(EXCLUDE), name='cali')
+        remove_list[i] = detect_steps(cali2, remove=remove_list[i], manual=args.manualcali, num=cali_steps[i], numcolumn=10-len(EXCLUDE), name=f'cali{test+1}-{i+1}')
         with open(folder + '/cali_mask.pkl', 'wb') as file:
             pickle.dump(remove_list, file)
         # Find where steps occur (changes from remove to not remove)
@@ -654,11 +654,11 @@ def prepare_cali_data(folder, all_cali, cali_weights, cali_steps = (9, 9), basel
     columns = ['weight (kg)', 'angle (rad)', 'samples'] + [f'force_{i+1} (N)' for i in included] + [f'std_{i+1} (N)' for i in included]
     return (all_data, columns)
 
-def prepare_all_data(folder, data, pressure):
+def prepare_all_data(folder, data, pressure, test=None):
     '''
     Return data as single 2D array, along with column labels
     '''
-    meas_forces, meas_stds, meas_samples, angles = average_all_data(data, folder)
+    meas_forces, meas_stds, meas_samples, angles = average_all_data(data, folder, test=test)
     allruns = np.zeros((len(data)*(len(RPMS)+1), 4))
     allforces = np.zeros((len(allruns), 10-len(EXCLUDE)))
     allstds = np.zeros((len(allruns), 10-len(EXCLUDE)))
@@ -706,7 +706,7 @@ def load_csv(name):
                 data.append([float(elm) for elm in row.replace('\n', '').split(', ')])
     return np.array(data), columns
 
-def average_all_data(data, folder, baselog=10):
+def average_all_data(data, folder, baselog=10, test = None):
     rpms = 7
     meas_forces = np.zeros((len(data), 10-len(EXCLUDE), rpms))
     meas_stds = np.zeros((len(data), 10-len(EXCLUDE), rpms))
@@ -720,7 +720,7 @@ def average_all_data(data, folder, baselog=10):
         logging.log(baselog-1, f'{i+1}/{len(data)}')
         angles[i] = angle
         sanitise_forwards(df)
-        remove_list[i] = detect_steps(df, remove=remove_list[i], manual=args.manual)
+        remove_list[i] = detect_steps(df, remove=remove_list[i], manual=args.manual, name=f'Experiment{test+1}_{angle*180/np.pi}deg')
         # Find where steps occur (changes from remove to not remove)
         steps = np.diff(np.r_[remove_list[i],[1]])
         start_ind = np.where(steps < -0.5)[0]+1
@@ -771,7 +771,7 @@ def sanitise_forwards(df):
 
 def detect_steps(df, manual=True, remove=None, num=6, numcolumn=10, name=None):
     if name is None:
-        name = ''
+        name = f'{len(remove)}'
     average_time = 10
     data = df.iloc[:,1:].to_numpy()
     if remove is None:
@@ -790,8 +790,22 @@ def detect_steps(df, manual=True, remove=None, num=6, numcolumn=10, name=None):
     while not user == 'done':
         plt.plot(remove*-1e6)
         for i in range(numcolumn):
-            plt.plot(data.T[i])
-        plt.savefig(f'identification/{name}{len(remove)}.png')
+            ind = i+1
+            if ind > 3:
+                ind += 1
+            if ind > 8:
+                ind += 1
+            plt.plot(data.T[i], label=f'Load cell {ind}')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Counts')
+        plt.legend()
+        plt.grid(visible=True, which='major', color='#666666', linestyle='-')
+        plt.minorticks_on()
+        plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.2)
+        fname = f'identification/{name}.png'
+        plt.savefig(fname)
+        if sys.platform == 'linux':
+            os.system(f'convert {fname} -trim {fname}')
         if manual:
             plt.show()
         plt.close()
